@@ -5,7 +5,7 @@ FastAPI прокси-сервер для ElevenLabs API
 import os
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 import httpx
 import logging
 
@@ -84,7 +84,7 @@ async def forward_request(
         if "application/json" in content_type:
             try:
                 json_body = await request.json()
-            except:
+            except Exception:
                 pass
         elif "multipart/form-data" in content_type.lower():
             # Для multipart получаем форму и файлы
@@ -153,17 +153,30 @@ async def forward_request(
             # Выполняем запрос
             response = await client.request(**request_kwargs)
             
-            # Обрабатываем ответ
-            response_headers = dict(response.headers)
+            # Обрабатываем ответ - передаем все заголовки от ElevenLabs API
+            # Исключаем только служебные заголовки проксирования
+            response_headers = {}
             
-            # Удаляем заголовки, которые не должны проксироваться
-            headers_to_remove = ["content-encoding", "transfer-encoding", "connection"]
-            for header in headers_to_remove:
-                response_headers.pop(header, None)
+            # Заголовки, которые НЕ нужно передавать клиенту
+            headers_to_exclude = {
+                "content-encoding",
+                "transfer-encoding", 
+                "connection",
+                "host",
+            }
             
-            # Если ответ содержит аудио (stream), возвращаем поток
-            content_type = response.headers.get("content-type", "")
-            if "audio" in content_type or response.headers.get("content-type", "").startswith("application/octet-stream"):
+            # Копируем все заголовки от ElevenLabs API, кроме исключенных
+            for key, value in response.headers.items():
+                if key.lower() not in headers_to_exclude:
+                    response_headers[key] = value
+            
+            logger.debug(f"Передаем заголовки: {list(response_headers.keys())[:10]}")
+            
+            # Определяем тип контента
+            content_type = response.headers.get("content-type", "application/json")
+            
+            # Для аудио используем StreamingResponse
+            if "audio" in content_type or content_type.startswith("application/octet-stream"):
                 return StreamingResponse(
                     iter([response.content]),
                     status_code=response.status_code,
@@ -171,21 +184,14 @@ async def forward_request(
                     media_type=content_type
                 )
             
-            # Для JSON ответов
-            try:
-                return JSONResponse(
-                    content=response.json(),
-                    status_code=response.status_code,
-                    headers=response_headers
-                )
-            except:
-                # Если не JSON, возвращаем как есть
-                return Response(
-                    content=response.content,
-                    status_code=response.status_code,
-                    headers=response_headers,
-                    media_type=content_type
-                )
+            # Для всех остальных ответов используем Response с оригинальным содержимым
+            # Это гарантирует, что ответ будет идентичен ответу от ElevenLabs API
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers=response_headers,
+                media_type=content_type
+            )
                 
         except httpx.TimeoutException:
             logger.error(f"Таймаут при запросе к {target_url}")
