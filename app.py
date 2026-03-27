@@ -27,7 +27,7 @@ async def proxy(path: str, request: Request):
     body = await request.body()
     
     # Создаем клиент для выполнения запроса
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=180.0) as client:
         try:
             # Выполняем запрос на целевой сервер
             response = await client.request(
